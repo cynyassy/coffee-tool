@@ -180,6 +180,55 @@ npm run start
 
 Useful for hosting platforms (Render/Railway/etc.).
 
+## Deploy on Render Free
+
+This repo includes a Render blueprint config:
+
+- `render.yaml`
+
+It creates:
+
+- one free Node web service
+- one free PostgreSQL instance
+
+### 1. Create from Blueprint
+
+1. Push latest code to GitHub.
+2. In Render dashboard: **New +** -> **Blueprint**.
+3. Select this repo.
+4. Render reads `render.yaml` and proposes:
+   - `coffee-tools-api` web service
+   - `coffee-tools-db` postgres
+5. Click **Apply**.
+
+### 2. Run DB schema migration once
+
+After first deploy succeeds, open Render shell for the web service and run:
+
+```bash
+npm run db:push
+```
+
+Do this again whenever schema/migration files change.
+
+### 3. Open app
+
+- API health: `https://<your-render-domain>/health`
+- UI: `https://<your-render-domain>/app/`
+
+### 4. Later: enable auth
+
+When ready for login:
+
+1. Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in Render env vars.
+2. Change `AUTH_REQUIRED` from `false` to `true`.
+3. Redeploy.
+
+### Render free tier caveats
+
+- Web service may sleep after inactivity (cold starts).
+- Free Postgres is for testing and has expiry limits on free plan.
+
 ## Testing
 
 Run integration tests:
