@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Coffee Tools MVP</title>
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Coffee Tools MVP</h1>
+      <p>Backend-connected test UI</p>
+    </header>
+
+    <nav>
+      <button id="nav-my-bags" class="active">My Bags</button>
+      <button id="nav-create">Create Bag</button>
+      <button id="nav-archived">Archived</button>
+      <button id="nav-detail" disabled>Bag Detail</button>
+      <button id="nav-analytics" disabled>Analytics</button>
+    </nav>
+
+    <main>
+      <section id="view-my-bags" class="view"></section>
+      <section id="view-create" class="view hidden"></section>
+      <section id="view-archived" class="view hidden"></section>
+      <section id="view-detail" class="view hidden"></section>
+      <section id="view-analytics" class="view hidden"></section>
+    </main>
+
+    <template id="bag-card-template">
+      <article class="card bag-card">
+        <h3 class="bag-name"></h3>
+        <p class="bag-meta"></p>
+        <p class="bag-stats"></p>
+        <button class="open-bag">Open</button>
+      </article>
+    </template>
+
+    <script src="/app/app.js" type="module"></script>
+  </body>
+</html>

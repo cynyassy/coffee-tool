@@ -1,0 +1,2 @@
+CREATE INDEX "bags_user_status_updated_at_idx" ON "bags" USING btree ("user_id","status","updated_at");--> statement-breakpoint
+CREATE INDEX "brews_bag_created_at_idx" ON "brews" USING btree ("bag_id","created_at");

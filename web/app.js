@@ -1,0 +1,555 @@
+// Local UI state shared across screens.
+const state = {
+  selectedBagId: null,
+};
+
+// Screen roots.
+const views = {
+  myBags: document.getElementById("view-my-bags"),
+  create: document.getElementById("view-create"),
+  archived: document.getElementById("view-archived"),
+  detail: document.getElementById("view-detail"),
+  analytics: document.getElementById("view-analytics"),
+};
+
+// Navigation buttons.
+const navButtons = {
+  myBags: document.getElementById("nav-my-bags"),
+  create: document.getElementById("nav-create"),
+  archived: document.getElementById("nav-archived"),
+  detail: document.getElementById("nav-detail"),
+  analytics: document.getElementById("nav-analytics"),
+};
+
+function setActiveView(key) {
+  Object.entries(views).forEach(([k, el]) => {
+    el.classList.toggle("hidden", k !== key);
+  });
+  Object.entries(navButtons).forEach(([k, btn]) => {
+    btn.classList.toggle("active", k === key);
+  });
+}
+
+async function request(path, init) {
+  const response = await fetch(path, {
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    ...init,
+  });
+
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (_error) {
+    data = null;
+  }
+
+  if (!response.ok) {
+    const error = new Error("Request failed");
+    error.payload = data;
+    error.status = response.status;
+    throw error;
+  }
+
+  return data;
+}
+
+const api = {
+  listBags: (status = "ACTIVE") => request(`/bags?status=${status}`),
+  createBag: (payload) => request("/bags", { method: "POST", body: JSON.stringify(payload) }),
+  updateBag: (id, payload) => request(`/bags/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  getBag: (id) => request(`/bags/${id}`),
+  archiveBag: (id) => request(`/bags/${id}/archive`, { method: "PATCH" }),
+  unarchiveBag: (id) => request(`/bags/${id}/unarchive`, { method: "PATCH" }),
+  listBrews: (id) => request(`/bags/${id}/brews`),
+  createBrew: (id, payload) => request(`/bags/${id}/brews`, { method: "POST", body: JSON.stringify(payload) }),
+  setBestBrew: (bagId, brewId) => request(`/bags/${bagId}/brews/${brewId}/best`, { method: "PATCH" }),
+  analytics: (id) => request(`/bags/${id}/analytics`),
+};
+
+function renderValidationErrors(payload) {
+  if (!payload?.errors || !Array.isArray(payload.errors)) {
+    return "<ul class='error-list'><li>Request failed</li></ul>";
+  }
+  return `<ul class='error-list'>${payload.errors
+    .map((e) => `<li><strong>${e.field}</strong>: ${e.message}</li>`)
+    .join("")}</ul>`;
+}
+
+function daysOffRoast(roastDate, brewDate) {
+  if (!roastDate || !brewDate) return "-";
+  const diffMs = new Date(brewDate).getTime() - new Date(roastDate).getTime();
+  return `${Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)))}d`;
+}
+
+function ensureBagSelected() {
+  const enabled = !!state.selectedBagId;
+  navButtons.detail.disabled = !enabled;
+  navButtons.analytics.disabled = !enabled;
+}
+
+function sliderField(label, name, min, max, step, value = min) {
+  return `
+    <label>${label}
+      <div class="slider-row">
+        <input type="range" name="${name}" min="${min}" max="${max}" step="${step}" value="${value}" data-output="${name}-output" />
+        <output id="${name}-output">${value}</output>
+      </div>
+    </label>
+  `;
+}
+
+function wireSliderOutputs(scope) {
+  scope.querySelectorAll("input[type='range'][data-output]").forEach((el) => {
+    const output = scope.querySelector(`#${el.dataset.output}`);
+    const sync = () => {
+      output.textContent = el.value;
+    };
+    el.addEventListener("input", sync);
+    sync();
+  });
+}
+
+function brewTableHtml(brews, roastDate) {
+  if (!brews.length) return `<p class="inline-meta">No brews yet</p>`;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Brew Date</th>
+            <th>Days Off Roast</th>
+            <th>Brewer</th>
+            <th>Method</th>
+            <th>Grinder</th>
+            <th>Grind Setting</th>
+            <th>Dose (gms)</th>
+            <th>Water (ml)</th>
+            <th>Rating</th>
+            <th>Flavour Notes</th>
+            <th>Best</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${brews
+            .map(
+              (brew) => `
+              <tr>
+                <td>${new Date(brew.createdAt).toLocaleString()}</td>
+                <td>${daysOffRoast(roastDate, brew.createdAt)}</td>
+                <td>${brew.brewer || "-"}</td>
+                <td>${brew.method}</td>
+                <td>${brew.grinder || "-"}</td>
+                <td>${brew.grindSetting ?? "-"}</td>
+                <td>${brew.dose ?? "-"}</td>
+                <td>${brew.waterAmount ?? "-"}</td>
+                <td>${brew.rating ?? "-"}</td>
+                <td>${brew.flavourNotes || "-"}</td>
+                <td><button class="set-best" data-brew-id="${brew.id}">${brew.isBest ? "★ Best" : "Mark Best"}</button></td>
+              </tr>
+            `,
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function renderMyBags() {
+  const bags = await api.listBags("ACTIVE");
+  const tpl = document.getElementById("bag-card-template");
+
+  views.myBags.innerHTML = `<h2>My Bags</h2><div id="active-bag-list"></div>`;
+  const list = document.getElementById("active-bag-list");
+
+  if (!bags.length) {
+    list.innerHTML = `<p class="inline-meta">No active bags</p>`;
+    return;
+  }
+
+  bags.forEach((bag) => {
+    const node = tpl.content.cloneNode(true);
+    node.querySelector(".bag-name").textContent = bag.coffeeName;
+    node.querySelector(".bag-meta").textContent = `${bag.roaster} ${bag.origin ? `- ${bag.origin}` : ""}`;
+    node.querySelector(".bag-stats").textContent = `${bag.brewCount} brews - avg ${bag.averageRating ?? "-"} - age ${bag.roastAgeDays ?? "?"}d (${bag.restingStatus})`;
+    node.querySelector(".open-bag").addEventListener("click", async () => {
+      state.selectedBagId = bag.id;
+      ensureBagSelected();
+      await renderDetail();
+      setActiveView("detail");
+    });
+    list.appendChild(node);
+  });
+}
+
+function renderCreateForm() {
+  views.create.innerHTML = `
+    <h2>Create Bag</h2>
+    <form id="create-bag-form" class="card">
+      <label>Coffee Name *<input name="coffeeName" required /></label>
+      <label>Roaster *<input name="roaster" required /></label>
+      <label>Origin<input name="origin" /></label>
+      <label>Process<input name="process" /></label>
+      <label>Roast Date *<input type="date" name="roastDate" required /></label>
+      <label>Notes<textarea name="notes"></textarea></label>
+      <div class="actions">
+        <button type="submit" class="primary">Save Bag</button>
+      </div>
+      <div id="create-errors"></div>
+    </form>
+  `;
+
+  const form = document.getElementById("create-bag-form");
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const fd = new FormData(form);
+    const payload = Object.fromEntries(fd.entries());
+    const cleaned = {
+      coffeeName: payload.coffeeName,
+      roaster: payload.roaster,
+      origin: payload.origin || null,
+      process: payload.process || null,
+      roastDate: payload.roastDate,
+      notes: payload.notes || null,
+    };
+
+    try {
+      const bag = await api.createBag(cleaned);
+      form.reset();
+      document.getElementById("create-errors").innerHTML = "";
+      await renderMyBags();
+      state.selectedBagId = bag.id;
+      ensureBagSelected();
+      await renderDetail();
+      setActiveView("detail");
+    } catch (error) {
+      document.getElementById("create-errors").innerHTML = renderValidationErrors(error.payload);
+    }
+  });
+}
+
+async function promptEditBag(bag) {
+  const coffeeName = window.prompt("Coffee name", bag.coffeeName);
+  if (coffeeName === null) return;
+  const roaster = window.prompt("Roaster", bag.roaster);
+  if (roaster === null) return;
+  const origin = window.prompt("Origin (optional)", bag.origin || "");
+  if (origin === null) return;
+  const process = window.prompt("Process (optional)", bag.process || "");
+  if (process === null) return;
+  const roastDate = window.prompt(
+    "Roast date (YYYY-MM-DD)",
+    bag.roastDate ? new Date(bag.roastDate).toISOString().slice(0, 10) : "",
+  );
+  if (roastDate === null) return;
+  const notes = window.prompt("Notes", bag.notes || "");
+  if (notes === null) return;
+
+  await api.updateBag(bag.id, {
+    coffeeName,
+    roaster,
+    origin,
+    process,
+    roastDate,
+    notes,
+  });
+}
+
+async function renderArchived() {
+  const bags = await api.listBags("ARCHIVED");
+  views.archived.innerHTML = `<h2>Archived Bags</h2><div id="archived-list"></div>`;
+  const list = document.getElementById("archived-list");
+
+  if (!bags.length) {
+    list.innerHTML = `<p class="inline-meta">No archived bags</p>`;
+    return;
+  }
+
+  bags.forEach((bag) => {
+    const card = document.createElement("article");
+    card.className = "card";
+    card.innerHTML = `
+      <h3>${bag.coffeeName}</h3>
+      <p class="inline-meta">${bag.roaster}</p>
+      <p class="inline-meta">${bag.brewCount} brews - avg rating ${bag.averageRating ?? "-"}</p>
+      <div class="actions">
+        <button class="arch-open">Open</button>
+        <button class="arch-analytics">View Analytics</button>
+        <button class="arch-unarchive">Unarchive</button>
+        <button class="arch-edit">Edit</button>
+      </div>
+    `;
+
+    card.querySelector(".arch-open").addEventListener("click", async () => {
+      state.selectedBagId = bag.id;
+      ensureBagSelected();
+      await renderDetail();
+      setActiveView("detail");
+    });
+
+    card.querySelector(".arch-analytics").addEventListener("click", async () => {
+      state.selectedBagId = bag.id;
+      ensureBagSelected();
+      await renderAnalytics();
+      setActiveView("analytics");
+    });
+
+    card.querySelector(".arch-unarchive").addEventListener("click", async () => {
+      await api.unarchiveBag(bag.id);
+      await renderArchived();
+      await renderMyBags();
+    });
+
+    card.querySelector(".arch-edit").addEventListener("click", async () => {
+      const bagDetail = await api.getBag(bag.id);
+      await promptEditBag(bagDetail);
+      await renderArchived();
+      await renderMyBags();
+    });
+
+    list.appendChild(card);
+  });
+}
+
+function brewFormHtml() {
+  return `
+  <form id="create-brew-form" class="card">
+    <h3>Make a Cup</h3>
+    <label>Method *
+      <select name="method" required>
+        <option>V60</option>
+        <option>Chemex</option>
+        <option>Aeropress</option>
+        <option>French Press</option>
+        <option>Espresso</option>
+        <option>Moka Pot</option>
+      </select>
+    </label>
+    <label>Brewer<input name="brewer" /></label>
+    <label>Grinder<input name="grinder" /></label>
+    <label>Dose (gms)<input type="number" name="dose" /></label>
+    <label>Grind Setting<input type="number" name="grindSetting" /></label>
+    <label>Water Amount (ml)<input type="number" name="waterAmount" /></label>
+    ${sliderField("Rating", "rating", 0, 5, 0.1, 3)}
+    ${sliderField("Nutty", "nutty", 0, 5, 1, 2)}
+    ${sliderField("Acidity", "acidity", 0, 5, 1, 3)}
+    ${sliderField("Fruity", "fruity", 0, 5, 1, 3)}
+    ${sliderField("Floral", "floral", 0, 5, 1, 3)}
+    ${sliderField("Sweetness", "sweetness", 0, 5, 1, 3)}
+    ${sliderField("Chocolate", "chocolate", 0, 5, 1, 2)}
+    <label>Flavour Notes<textarea name="flavourNotes"></textarea></label>
+    <div class="actions"><button type="submit" class="primary">Save Brew</button></div>
+    <div id="brew-errors"></div>
+  </form>`;
+}
+
+async function renderDetail() {
+  if (!state.selectedBagId) {
+    views.detail.innerHTML = `<p class="inline-meta">Select a bag first.</p>`;
+    return;
+  }
+
+  const [bag, brews] = await Promise.all([
+    api.getBag(state.selectedBagId),
+    api.listBrews(state.selectedBagId),
+  ]);
+
+  views.detail.innerHTML = `
+    <h2>${bag.coffeeName}</h2>
+    <p class="inline-meta">${bag.roaster} ${bag.origin ? `- ${bag.origin}` : ""} ${bag.process ? `- ${bag.process}` : ""}</p>
+    <p class="inline-meta">Roasted: ${bag.roastDate ? new Date(bag.roastDate).toLocaleDateString() : "-"} | Age: ${bag.roastAgeDays} days | ${bag.restingStatus}</p>
+    <p>${bag.notes || ""}</p>
+
+    <div class="actions">
+      <button id="refresh-detail" class="ghost">Refresh</button>
+      <button id="view-analytics" class="ghost">View Analytics</button>
+      <button id="edit-bag" class="ghost">Edit Bag</button>
+      <button id="archive-bag" class="warn">Finish Bag</button>
+    </div>
+
+    ${brewFormHtml()}
+
+    <h3>Brew History</h3>
+    <div id="brew-list">${brewTableHtml(brews, bag.roastDate)}</div>
+  `;
+
+  wireSliderOutputs(views.detail);
+
+  document.getElementById("refresh-detail").addEventListener("click", renderDetail);
+
+  document.getElementById("view-analytics").addEventListener("click", async () => {
+    await renderAnalytics();
+    setActiveView("analytics");
+  });
+
+  document.getElementById("edit-bag").addEventListener("click", async () => {
+    await promptEditBag(bag);
+    await renderMyBags();
+    await renderArchived();
+    await renderDetail();
+  });
+
+  document.getElementById("archive-bag").addEventListener("click", async () => {
+    await api.archiveBag(state.selectedBagId);
+    state.selectedBagId = null;
+    ensureBagSelected();
+    await renderMyBags();
+    await renderArchived();
+    setActiveView("myBags");
+  });
+
+  views.detail.querySelectorAll(".set-best").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await api.setBestBrew(state.selectedBagId, btn.dataset.brewId);
+      await renderDetail();
+    });
+  });
+
+  const form = document.getElementById("create-brew-form");
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const fd = new FormData(form);
+    const raw = Object.fromEntries(fd.entries());
+
+    const payload = {
+      method: raw.method,
+      brewer: raw.brewer || null,
+      grinder: raw.grinder || null,
+      dose: raw.dose || null,
+      grindSetting: raw.grindSetting || null,
+      waterAmount: raw.waterAmount || null,
+      rating: raw.rating || null,
+      nutty: raw.nutty || null,
+      acidity: raw.acidity || null,
+      fruity: raw.fruity || null,
+      floral: raw.floral || null,
+      sweetness: raw.sweetness || null,
+      chocolate: raw.chocolate || null,
+      flavourNotes: raw.flavourNotes || null,
+    };
+
+    try {
+      await api.createBrew(state.selectedBagId, payload);
+      document.getElementById("brew-errors").innerHTML = "";
+      await renderMyBags();
+      await renderArchived();
+      await renderDetail();
+    } catch (error) {
+      document.getElementById("brew-errors").innerHTML = renderValidationErrors(error.payload);
+    }
+  });
+}
+
+async function renderAnalytics() {
+  if (!state.selectedBagId) {
+    views.analytics.innerHTML = `<p class="inline-meta">Select a bag first.</p>`;
+    return;
+  }
+
+  const [bag, brews, analytics] = await Promise.all([
+    api.getBag(state.selectedBagId),
+    api.listBrews(state.selectedBagId),
+    api.analytics(state.selectedBagId),
+  ]);
+
+  const best = analytics.bestBrew;
+  views.analytics.innerHTML = `
+    <h2>Analytics - ${bag.coffeeName}</h2>
+    <article class="card">
+      <h3>Coffee Journey Sheet Snapshot</h3>
+      <p class="inline-meta"><strong>Roaster:</strong> ${bag.roaster}</p>
+      <p class="inline-meta"><strong>Origin:</strong> ${bag.origin || "-"}</p>
+      <p class="inline-meta"><strong>Process:</strong> ${bag.process || "-"}</p>
+      <p class="inline-meta"><strong>Roast Date:</strong> ${bag.roastDate ? new Date(bag.roastDate).toLocaleDateString() : "-"}</p>
+      <p class="inline-meta"><strong>Bag Age:</strong> ${bag.roastAgeDays} days (${bag.restingStatus})</p>
+    </article>
+
+    <article class="card">
+      <h3>Brew Journey Table</h3>
+      ${brewTableHtml([...brews].reverse(), bag.roastDate)}
+    </article>
+
+    <article class="card">
+      <h3>Best Recipe So Far</h3>
+      ${
+        best
+          ? `<p><strong>Method:</strong> ${best.method}</p>
+             <p><strong>Dose:</strong> ${best.dose ?? "-"} gms</p>
+             <p><strong>Water:</strong> ${best.waterAmount ?? "-"} ml</p>
+             <p><strong>Grinder:</strong> ${best.grinder || "-"}</p>
+             <p><strong>Grind Setting:</strong> ${best.grindSetting ?? "-"}</p>
+             <p><strong>Rating:</strong> ${best.rating ?? "-"}</p>
+             <p><strong>Notes:</strong> ${best.flavourNotes || "-"}</p>`
+          : "<p class='inline-meta'>No best brew selected yet.</p>"
+      }
+    </article>
+
+    <article class="card">
+      <h3>Taste Profile Averages</h3>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><th>Nutty</th><td>${analytics.averageTasteProfile.nutty ?? "-"}</td></tr>
+            <tr><th>Acidity</th><td>${analytics.averageTasteProfile.acidity ?? "-"}</td></tr>
+            <tr><th>Fruity</th><td>${analytics.averageTasteProfile.fruity ?? "-"}</td></tr>
+            <tr><th>Floral</th><td>${analytics.averageTasteProfile.floral ?? "-"}</td></tr>
+            <tr><th>Sweetness</th><td>${analytics.averageTasteProfile.sweetness ?? "-"}</td></tr>
+            <tr><th>Chocolate</th><td>${analytics.averageTasteProfile.chocolate ?? "-"}</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="inline-meta">Total Brews: ${analytics.totalBrews} | Average Rating: ${analytics.averageRating ?? "-"}</p>
+    </article>
+
+    <div class="actions">
+      <button id="analytics-back" class="ghost">Back to Bag</button>
+    </div>
+  `;
+
+  views.analytics.querySelectorAll(".set-best").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await api.setBestBrew(state.selectedBagId, btn.dataset.brewId);
+      await renderAnalytics();
+    });
+  });
+
+  document.getElementById("analytics-back").addEventListener("click", async () => {
+    await renderDetail();
+    setActiveView("detail");
+  });
+}
+
+navButtons.myBags.addEventListener("click", async () => {
+  await renderMyBags();
+  setActiveView("myBags");
+});
+
+navButtons.create.addEventListener("click", () => {
+  renderCreateForm();
+  setActiveView("create");
+});
+
+navButtons.archived.addEventListener("click", async () => {
+  await renderArchived();
+  setActiveView("archived");
+});
+
+navButtons.detail.addEventListener("click", async () => {
+  await renderDetail();
+  setActiveView("detail");
+});
+
+navButtons.analytics.addEventListener("click", async () => {
+  await renderAnalytics();
+  setActiveView("analytics");
+});
+
+async function bootstrap() {
+  renderCreateForm();
+  await renderMyBags();
+  await renderArchived();
+  ensureBagSelected();
+  setActiveView("myBags");
+}
+
+bootstrap();

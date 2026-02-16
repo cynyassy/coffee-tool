@@ -1,0 +1,1 @@
+ALTER TABLE "brews" ADD COLUMN "is_best" boolean DEFAULT false NOT NULL;
