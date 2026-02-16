@@ -18,6 +18,11 @@ Core workflow:
 
 A lightweight browser UI is also included at `/app` for end-to-end manual testing.
 
+## Live URL
+
+- App: <https://coffee-tools-api.onrender.com/app/>
+- Health: <https://coffee-tools-api.onrender.com/health>
+
 ## Tech Stack
 
 - Node.js + TypeScript
@@ -203,10 +208,14 @@ It creates:
 
 ### 2. Run DB schema migration once
 
-After first deploy succeeds, open Render shell for the web service and run:
+If Render shell is unavailable on your plan, run migration locally against Render Postgres:
+
+1. In Render DB service, copy **External Database URL**.
+2. Append SSL mode (`?sslmode=require`).
+3. Run locally:
 
 ```bash
-npm run db:push
+DATABASE_URL='postgresql://...render.com/coffee_tools?sslmode=require' npm run db:push
 ```
 
 Do this again whenever schema/migration files change.
@@ -223,6 +232,12 @@ When ready for login:
 1. Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in Render env vars.
 2. Change `AUTH_REQUIRED` from `false` to `true`.
 3. Redeploy.
+
+### 5. Supabase email login values (Render env)
+
+- `SUPABASE_URL`: `https://<project-ref>.supabase.co`
+- `SUPABASE_ANON_KEY`: Supabase publishable key (`sb_publishable_...`)
+- Never use `service_role` or secret key in frontend/browser flow.
 
 ### Render free tier caveats
 
