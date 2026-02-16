@@ -1,11 +1,11 @@
-import express, { type Response } from "express";
+import express, { type Request, type Response } from "express";
 import cors from "cors";
 import "dotenv/config";
 import path from "path";
 
 import { db } from "./db/client";
 import { bags, brews } from "./db/schema";
-import { eq, and, desc, inArray, sql, isNull } from "drizzle-orm";
+import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import type {
   AnalyticsResponse,
@@ -24,7 +24,6 @@ const app = express();
 // Basic middleware: CORS, JSON body parsing, and static frontend hosting.
 app.use(cors());
 app.use(express.json());
-app.use("/app", express.static(path.resolve(process.cwd(), "web")));
 
 // Quick health endpoint to confirm service is up.
 app.get("/health", (_req, res) => {
@@ -33,13 +32,86 @@ app.get("/health", (_req, res) => {
 
 // Temporary single-user model until auth is added.
 const DEV_USER_ID = process.env.DEV_USER_ID ?? "00000000-0000-0000-0000-000000000001";
+const AUTH_REQUIRED = process.env.AUTH_REQUIRED === "true";
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+
+type SupabaseUser = { id: string };
+
+function isPublicPath(pathname: string) {
+  return pathname === "/health" || pathname.startsWith("/app");
+}
+
+async function fetchSupabaseUser(accessToken: string): Promise<SupabaseUser | null> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+
+  const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      apikey: SUPABASE_ANON_KEY,
+    },
+  });
+
+  if (!response.ok) return null;
+  const payload = (await response.json()) as SupabaseUser;
+  if (!payload?.id) return null;
+  return payload;
+}
+
+// Exposes non-secret auth config to browser frontend.
+app.get("/app/config.js", (_req, res) => {
+  res.type("application/javascript").send(
+    `window.APP_CONFIG = ${JSON.stringify({
+      authRequired: AUTH_REQUIRED,
+      supabaseUrl: SUPABASE_URL ?? null,
+      supabaseAnonKey: SUPABASE_ANON_KEY ?? null,
+    })};`,
+  );
+});
+app.use("/app", express.static(path.resolve(process.cwd(), "web")));
+
+// Auth middleware:
+// - AUTH_REQUIRED=false: allow guest fallback to DEV_USER_ID
+// - AUTH_REQUIRED=true: require valid Supabase access token on API routes
+app.use(async (req, res, next) => {
+  if (isPublicPath(req.path)) return next();
+
+  const authHeader = req.header("authorization");
+  const token = authHeader?.toLowerCase().startsWith("bearer ")
+    ? authHeader.slice("bearer ".length).trim()
+    : null;
+
+  if (!token) {
+    if (!AUTH_REQUIRED) {
+      res.locals.userId = DEV_USER_ID;
+      return next();
+    }
+    return res.status(401).json({ error: "Authentication required" });
+  }
+
+  const user = await fetchSupabaseUser(token);
+  if (!user) {
+    if (!AUTH_REQUIRED) {
+      res.locals.userId = DEV_USER_ID;
+      return next();
+    }
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+
+  res.locals.userId = user.id;
+  return next();
+});
+
+function getRequestUserId(req: Request): string {
+  return (req.res?.locals.userId as string | undefined) ?? DEV_USER_ID;
+}
 
 // Ensures a bag exists and belongs to the current dev user.
-async function getOwnedBagById(bagId: string) {
+async function getOwnedBagById(bagId: string, userId: string) {
   const rows = await db
     .select()
     .from(bags)
-    .where(and(eq(bags.id, bagId), eq(bags.userId, DEV_USER_ID)));
+    .where(and(eq(bags.id, bagId), eq(bags.userId, userId)));
   return rows[0] ?? null;
 }
 
@@ -150,6 +222,7 @@ function toBagListItemResponse(
 // POST /bags
 // Creates a new active bag for DEV_USER_ID.
 app.post("/bags", async (req, res) => {
+  const userId = getRequestUserId(req);
   const { coffeeName, roaster, origin, process, roastDate, notes } = req.body ?? {};
 
   // Collect all validation issues so frontend can show field-level feedback.
@@ -173,7 +246,7 @@ app.post("/bags", async (req, res) => {
     .insert(bags)
     .values({
       id,
-      userId: DEV_USER_ID,
+      userId,
       coffeeName,
       roaster,
       origin: origin ?? null,
@@ -193,6 +266,7 @@ app.post("/bags", async (req, res) => {
 // GET /bags?status=ACTIVE|ARCHIVED
 // Returns user's bags with brew counts and computed roast metadata.
 app.get("/bags", async (req, res) => {
+  const userId = getRequestUserId(req);
   const status = (req.query.status as string | undefined) ?? "ACTIVE";
   if (status !== "ACTIVE" && status !== "ARCHIVED") {
     return sendValidationError(res, [{ field: "status", message: "must be ACTIVE or ARCHIVED" }]);
@@ -201,7 +275,7 @@ app.get("/bags", async (req, res) => {
   const rows = await db
     .select()
     .from(bags)
-    .where(and(eq(bags.userId, DEV_USER_ID), eq(bags.status, status)))
+    .where(and(eq(bags.userId, userId), eq(bags.status, status)))
     .orderBy(bags.updatedAt);
 
   if (!rows.length) return res.json([]);
@@ -234,8 +308,9 @@ app.get("/bags", async (req, res) => {
 // POST /bags/:id/brews
 // Adds a brew entry linked to an owned bag.
 app.post("/bags/:id/brews", async (req, res) => {
+  const userId = getRequestUserId(req);
   const bagId = req.params.id;
-  const bag = await getOwnedBagById(bagId);
+  const bag = await getOwnedBagById(bagId, userId);
   if (!bag) return res.status(404).json({ error: "Bag not found" });
 
   const {
@@ -321,8 +396,9 @@ app.post("/bags/:id/brews", async (req, res) => {
 // GET /bags/:id/brews
 // Brew history is returned newest first for bag detail UI.
 app.get("/bags/:id/brews", async (req, res) => {
+  const userId = getRequestUserId(req);
   const bagId = req.params.id;
-  const bag = await getOwnedBagById(bagId);
+  const bag = await getOwnedBagById(bagId, userId);
   if (!bag) return res.status(404).json({ error: "Bag not found" });
 
   const rows = await db
@@ -338,8 +414,9 @@ app.get("/bags/:id/brews", async (req, res) => {
 // GET /bags/:id/analytics
 // Computes bag-level aggregates used by charts/cards in analytics screen.
 app.get("/bags/:id/analytics", async (req, res) => {
+  const userId = getRequestUserId(req);
   const bagId = req.params.id;
-  const bag = await getOwnedBagById(bagId);
+  const bag = await getOwnedBagById(bagId, userId);
   if (!bag) return res.status(404).json({ error: "Bag not found" });
 
   const rows = await db
@@ -410,12 +487,13 @@ app.get("/bags/:id/analytics", async (req, res) => {
 // GET /bags/:id
 // Returns single owned bag with computed roast metadata.
 app.get("/bags/:id", async (req, res) => {
+  const userId = getRequestUserId(req);
   const bagId = req.params.id;
 
   const rows = await db
     .select()
     .from(bags)
-    .where(and(eq(bags.id, bagId), eq(bags.userId, DEV_USER_ID)));
+    .where(and(eq(bags.id, bagId), eq(bags.userId, userId)));
 
   if (!rows[0]) return res.status(404).json({ error: "Bag not found" });
   const payload: BagDetailResponse = toBagDetailResponse(rows[0]);
@@ -425,6 +503,7 @@ app.get("/bags/:id", async (req, res) => {
 // PATCH /bags/:id/archive
 // Marks bag as archived; archived bags are hidden from ACTIVE list.
 app.patch("/bags/:id/archive", async (req, res) => {
+  const userId = getRequestUserId(req);
   const bagId = req.params.id;
 
   const updated = await db
@@ -434,7 +513,7 @@ app.patch("/bags/:id/archive", async (req, res) => {
       archivedAt: new Date(),
       updatedAt: new Date(),
     })
-    .where(and(eq(bags.id, bagId), eq(bags.userId, DEV_USER_ID)))
+    .where(and(eq(bags.id, bagId), eq(bags.userId, userId)))
     .returning();
 
   if (!updated[0]) return res.status(404).json({ error: "Bag not found" });
@@ -444,6 +523,7 @@ app.patch("/bags/:id/archive", async (req, res) => {
 // PATCH /bags/:id/unarchive
 // Moves an archived bag back to active inventory.
 app.patch("/bags/:id/unarchive", async (req, res) => {
+  const userId = getRequestUserId(req);
   const bagId = req.params.id;
 
   const updated = await db
@@ -453,7 +533,7 @@ app.patch("/bags/:id/unarchive", async (req, res) => {
       archivedAt: null,
       updatedAt: new Date(),
     })
-    .where(and(eq(bags.id, bagId), eq(bags.userId, DEV_USER_ID)))
+    .where(and(eq(bags.id, bagId), eq(bags.userId, userId)))
     .returning();
 
   if (!updated[0]) return res.status(404).json({ error: "Bag not found" });
@@ -463,8 +543,9 @@ app.patch("/bags/:id/unarchive", async (req, res) => {
 // PATCH /bags/:id
 // Allows editing bag metadata for future corrections and archived bag maintenance.
 app.patch("/bags/:id", async (req, res) => {
+  const userId = getRequestUserId(req);
   const bagId = req.params.id;
-  const existing = await getOwnedBagById(bagId);
+  const existing = await getOwnedBagById(bagId, userId);
   if (!existing) return res.status(404).json({ error: "Bag not found" });
 
   const { coffeeName, roaster, origin, process, roastDate, notes } = req.body ?? {};
@@ -486,7 +567,7 @@ app.patch("/bags/:id", async (req, res) => {
   const updated = await db
     .update(bags)
     .set(updates)
-    .where(and(eq(bags.id, bagId), eq(bags.userId, DEV_USER_ID)))
+    .where(and(eq(bags.id, bagId), eq(bags.userId, userId)))
     .returning();
 
   if (!updated[0]) return res.status(404).json({ error: "Bag not found" });
@@ -497,10 +578,11 @@ app.patch("/bags/:id", async (req, res) => {
 // PATCH /bags/:bagId/brews/:brewId/best
 // Keeps exactly one "best" brew per bag by clearing previous flags first.
 app.patch("/bags/:bagId/brews/:brewId/best", async (req, res) => {
+  const userId = getRequestUserId(req);
   const bagId = req.params.bagId;
   const brewId = req.params.brewId;
 
-  const bag = await getOwnedBagById(bagId);
+  const bag = await getOwnedBagById(bagId, userId);
   if (!bag) return res.status(404).json({ error: "Bag not found" });
 
   const updated = await db.transaction(async (tx) => {

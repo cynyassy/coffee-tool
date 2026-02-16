@@ -2,7 +2,12 @@
 
 Backend-first coffee brewing tracker for home brewers.
 
-It helps a single user (via `DEV_USER_ID`) run the full bag workflow:
+It supports two modes:
+
+- guest/dev mode via `DEV_USER_ID`
+- authenticated mode via Supabase token verification
+
+Core workflow:
 
 - create coffee bags
 - log brews against a bag
@@ -19,6 +24,7 @@ A lightweight browser UI is also included at `/app` for end-to-end manual testin
 - Express
 - Drizzle ORM
 - PostgreSQL (Docker)
+- Supabase Auth (email magic link + Google OAuth in `/app`)
 - Vitest (integration flow tests)
 
 ## Features
@@ -101,7 +107,15 @@ Create `.env` in project root:
 DATABASE_URL=postgres://coffee:coffee@localhost:5432/coffee_tools
 PORT=3000
 DEV_USER_ID=00000000-0000-0000-0000-000000000001
+AUTH_REQUIRED=false
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
 ```
+
+Auth behavior:
+
+- `AUTH_REQUIRED=false`: API works without login (falls back to `DEV_USER_ID`).
+- `AUTH_REQUIRED=true`: API requires Bearer token verified against Supabase.
 
 ### 3. Start Postgres
 
@@ -130,6 +144,41 @@ Open:
 - <http://localhost:3000/app/>
 
 This UI lets you create bags, log brews via sliders, mark best brew, archive/unarchive, edit bags, and view analytics.
+It also includes auth controls in the header:
+
+- email magic link
+- Google login
+- logout
+
+## Auth Setup (Supabase)
+
+1. Create Supabase project.
+2. In Auth providers:
+   - enable Email (OTP/magic link)
+   - optionally enable Google OAuth
+3. Add app URL and redirect URL:
+   - `http://localhost:3000/app/` for local
+   - your deployed `/app/` URL for production
+4. Put these env vars in `.env`:
+   - `SUPABASE_URL`
+   - `SUPABASE_ANON_KEY`
+5. Set `AUTH_REQUIRED=true` when you want mandatory login.
+
+## Production Build / Run
+
+Build TypeScript:
+
+```bash
+npm run build
+```
+
+Run compiled server:
+
+```bash
+npm run start
+```
+
+Useful for hosting platforms (Render/Railway/etc.).
 
 ## Testing
 

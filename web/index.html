@@ -10,6 +10,15 @@
     <header>
       <h1>Coffee Tools MVP</h1>
       <p>Backend-connected test UI</p>
+      <div id="auth-panel" class="card">
+        <p id="auth-status" class="inline-meta">Auth: loading...</p>
+        <div class="actions">
+          <input id="auth-email" type="email" placeholder="you@example.com" />
+          <button id="auth-email-login" class="ghost">Email Login Link</button>
+          <button id="auth-google-login" class="ghost">Google Login</button>
+          <button id="auth-logout" class="warn">Logout</button>
+        </div>
+      </div>
     </header>
 
     <nav>
@@ -37,6 +46,7 @@
       </article>
     </template>
 
+    <script src="/app/config.js"></script>
     <script src="/app/app.js" type="module"></script>
   </body>
 </html>

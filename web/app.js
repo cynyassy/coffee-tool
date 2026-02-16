@@ -1,6 +1,12 @@
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
+
 // Local UI state shared across screens.
 const state = {
   selectedBagId: null,
+  authRequired: Boolean(window.APP_CONFIG?.authRequired),
+  accessToken: null,
+  supabase: null,
+  authReady: false,
 };
 
 // Screen roots.
@@ -21,6 +27,16 @@ const navButtons = {
   analytics: document.getElementById("nav-analytics"),
 };
 
+// Auth controls.
+const authElements = {
+  panel: document.getElementById("auth-panel"),
+  status: document.getElementById("auth-status"),
+  emailInput: document.getElementById("auth-email"),
+  emailLogin: document.getElementById("auth-email-login"),
+  googleLogin: document.getElementById("auth-google-login"),
+  logout: document.getElementById("auth-logout"),
+};
+
 function setActiveView(key) {
   Object.entries(views).forEach(([k, el]) => {
     el.classList.toggle("hidden", k !== key);
@@ -30,10 +46,39 @@ function setActiveView(key) {
   });
 }
 
+function updateAuthStatus() {
+  if (!state.authReady) {
+    authElements.status.textContent = "Auth: loading...";
+    return;
+  }
+
+  if (state.accessToken) {
+    authElements.status.textContent = state.authRequired
+      ? "Auth: signed in (required mode)"
+      : "Auth: signed in";
+    return;
+  }
+
+  authElements.status.textContent = state.authRequired
+    ? "Auth: signed out (login required for API calls)"
+    : "Auth: guest mode (login optional)";
+}
+
+function ensureBagSelected() {
+  const enabled = !!state.selectedBagId;
+  navButtons.detail.disabled = !enabled;
+  navButtons.analytics.disabled = !enabled;
+}
+
 async function request(path, init) {
+  const headers = { "Content-Type": "application/json", ...(init?.headers || {}) };
+  if (state.accessToken) {
+    headers.Authorization = `Bearer ${state.accessToken}`;
+  }
+
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
     ...init,
+    headers,
   });
 
   let data = null;
@@ -68,6 +113,7 @@ const api = {
 
 function renderValidationErrors(payload) {
   if (!payload?.errors || !Array.isArray(payload.errors)) {
+    if (payload?.error) return `<ul class='error-list'><li>${payload.error}</li></ul>`;
     return "<ul class='error-list'><li>Request failed</li></ul>";
   }
   return `<ul class='error-list'>${payload.errors
@@ -79,12 +125,6 @@ function daysOffRoast(roastDate, brewDate) {
   if (!roastDate || !brewDate) return "-";
   const diffMs = new Date(brewDate).getTime() - new Date(roastDate).getTime();
   return `${Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)))}d`;
-}
-
-function ensureBagSelected() {
-  const enabled = !!state.selectedBagId;
-  navButtons.detail.disabled = !enabled;
-  navButtons.analytics.disabled = !enabled;
 }
 
 function sliderField(label, name, min, max, step, value = min) {
@@ -155,31 +195,45 @@ function brewTableHtml(brews, roastDate) {
   `;
 }
 
+function showAuthRequiredError() {
+  if (!state.authRequired) return;
+  const html = "<ul class='error-list'><li>Please sign in to use the app.</li></ul>";
+  views.myBags.innerHTML = `<h2>My Bags</h2>${html}`;
+  views.archived.innerHTML = `<h2>Archived Bags</h2>${html}`;
+  views.detail.innerHTML = html;
+  views.analytics.innerHTML = html;
+}
+
 async function renderMyBags() {
-  const bags = await api.listBags("ACTIVE");
-  const tpl = document.getElementById("bag-card-template");
+  try {
+    const bags = await api.listBags("ACTIVE");
+    const tpl = document.getElementById("bag-card-template");
 
-  views.myBags.innerHTML = `<h2>My Bags</h2><div id="active-bag-list"></div>`;
-  const list = document.getElementById("active-bag-list");
+    views.myBags.innerHTML = `<h2>My Bags</h2><div id="active-bag-list"></div>`;
+    const list = document.getElementById("active-bag-list");
 
-  if (!bags.length) {
-    list.innerHTML = `<p class="inline-meta">No active bags</p>`;
-    return;
-  }
+    if (!bags.length) {
+      list.innerHTML = `<p class="inline-meta">No active bags</p>`;
+      return;
+    }
 
-  bags.forEach((bag) => {
-    const node = tpl.content.cloneNode(true);
-    node.querySelector(".bag-name").textContent = bag.coffeeName;
-    node.querySelector(".bag-meta").textContent = `${bag.roaster} ${bag.origin ? `- ${bag.origin}` : ""}`;
-    node.querySelector(".bag-stats").textContent = `${bag.brewCount} brews - avg ${bag.averageRating ?? "-"} - age ${bag.roastAgeDays ?? "?"}d (${bag.restingStatus})`;
-    node.querySelector(".open-bag").addEventListener("click", async () => {
-      state.selectedBagId = bag.id;
-      ensureBagSelected();
-      await renderDetail();
-      setActiveView("detail");
+    bags.forEach((bag) => {
+      const node = tpl.content.cloneNode(true);
+      node.querySelector(".bag-name").textContent = bag.coffeeName;
+      node.querySelector(".bag-meta").textContent = `${bag.roaster} ${bag.origin ? `- ${bag.origin}` : ""}`;
+      node.querySelector(".bag-stats").textContent = `${bag.brewCount} brews - avg ${bag.averageRating ?? "-"} - age ${bag.roastAgeDays ?? "?"}d (${bag.restingStatus})`;
+      node.querySelector(".open-bag").addEventListener("click", async () => {
+        state.selectedBagId = bag.id;
+        ensureBagSelected();
+        await renderDetail();
+        setActiveView("detail");
+      });
+      list.appendChild(node);
     });
-    list.appendChild(node);
-  });
+  } catch (error) {
+    if (error.status === 401) return showAuthRequiredError();
+    throw error;
+  }
 }
 
 function renderCreateForm() {
@@ -256,59 +310,64 @@ async function promptEditBag(bag) {
 }
 
 async function renderArchived() {
-  const bags = await api.listBags("ARCHIVED");
-  views.archived.innerHTML = `<h2>Archived Bags</h2><div id="archived-list"></div>`;
-  const list = document.getElementById("archived-list");
+  try {
+    const bags = await api.listBags("ARCHIVED");
+    views.archived.innerHTML = `<h2>Archived Bags</h2><div id="archived-list"></div>`;
+    const list = document.getElementById("archived-list");
 
-  if (!bags.length) {
-    list.innerHTML = `<p class="inline-meta">No archived bags</p>`;
-    return;
+    if (!bags.length) {
+      list.innerHTML = `<p class="inline-meta">No archived bags</p>`;
+      return;
+    }
+
+    bags.forEach((bag) => {
+      const card = document.createElement("article");
+      card.className = "card";
+      card.innerHTML = `
+        <h3>${bag.coffeeName}</h3>
+        <p class="inline-meta">${bag.roaster}</p>
+        <p class="inline-meta">${bag.brewCount} brews - avg rating ${bag.averageRating ?? "-"}</p>
+        <div class="actions">
+          <button class="arch-open">Open</button>
+          <button class="arch-analytics">View Analytics</button>
+          <button class="arch-unarchive">Unarchive</button>
+          <button class="arch-edit">Edit</button>
+        </div>
+      `;
+
+      card.querySelector(".arch-open").addEventListener("click", async () => {
+        state.selectedBagId = bag.id;
+        ensureBagSelected();
+        await renderDetail();
+        setActiveView("detail");
+      });
+
+      card.querySelector(".arch-analytics").addEventListener("click", async () => {
+        state.selectedBagId = bag.id;
+        ensureBagSelected();
+        await renderAnalytics();
+        setActiveView("analytics");
+      });
+
+      card.querySelector(".arch-unarchive").addEventListener("click", async () => {
+        await api.unarchiveBag(bag.id);
+        await renderArchived();
+        await renderMyBags();
+      });
+
+      card.querySelector(".arch-edit").addEventListener("click", async () => {
+        const bagDetail = await api.getBag(bag.id);
+        await promptEditBag(bagDetail);
+        await renderArchived();
+        await renderMyBags();
+      });
+
+      list.appendChild(card);
+    });
+  } catch (error) {
+    if (error.status === 401) return showAuthRequiredError();
+    throw error;
   }
-
-  bags.forEach((bag) => {
-    const card = document.createElement("article");
-    card.className = "card";
-    card.innerHTML = `
-      <h3>${bag.coffeeName}</h3>
-      <p class="inline-meta">${bag.roaster}</p>
-      <p class="inline-meta">${bag.brewCount} brews - avg rating ${bag.averageRating ?? "-"}</p>
-      <div class="actions">
-        <button class="arch-open">Open</button>
-        <button class="arch-analytics">View Analytics</button>
-        <button class="arch-unarchive">Unarchive</button>
-        <button class="arch-edit">Edit</button>
-      </div>
-    `;
-
-    card.querySelector(".arch-open").addEventListener("click", async () => {
-      state.selectedBagId = bag.id;
-      ensureBagSelected();
-      await renderDetail();
-      setActiveView("detail");
-    });
-
-    card.querySelector(".arch-analytics").addEventListener("click", async () => {
-      state.selectedBagId = bag.id;
-      ensureBagSelected();
-      await renderAnalytics();
-      setActiveView("analytics");
-    });
-
-    card.querySelector(".arch-unarchive").addEventListener("click", async () => {
-      await api.unarchiveBag(bag.id);
-      await renderArchived();
-      await renderMyBags();
-    });
-
-    card.querySelector(".arch-edit").addEventListener("click", async () => {
-      const bagDetail = await api.getBag(bag.id);
-      await promptEditBag(bagDetail);
-      await renderArchived();
-      await renderMyBags();
-    });
-
-    list.appendChild(card);
-  });
 }
 
 function brewFormHtml() {
@@ -519,6 +578,73 @@ async function renderAnalytics() {
   });
 }
 
+async function initAuth() {
+  const supabaseUrl = window.APP_CONFIG?.supabaseUrl;
+  const supabaseAnonKey = window.APP_CONFIG?.supabaseAnonKey;
+
+  if (supabaseUrl && supabaseAnonKey) {
+    state.supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const { data } = await state.supabase.auth.getSession();
+    state.accessToken = data.session?.access_token ?? null;
+
+    state.supabase.auth.onAuthStateChange((_event, session) => {
+      state.accessToken = session?.access_token ?? null;
+      updateAuthStatus();
+      renderMyBags().catch(() => {});
+      renderArchived().catch(() => {});
+      if (state.selectedBagId) {
+        renderDetail().catch(() => {});
+        renderAnalytics().catch(() => {});
+      }
+    });
+  }
+
+  authElements.emailLogin.addEventListener("click", async () => {
+    if (!state.supabase) return;
+    const email = authElements.emailInput.value.trim();
+    if (!email) {
+      alert("Enter email first");
+      return;
+    }
+
+    const { error } = await state.supabase.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: `${window.location.origin}/app/`,
+      },
+    });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    alert("Magic link sent. Open your email on this device.");
+  });
+
+  authElements.googleLogin.addEventListener("click", async () => {
+    if (!state.supabase) return;
+    const { error } = await state.supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/app/`,
+      },
+    });
+    if (error) alert(error.message);
+  });
+
+  authElements.logout.addEventListener("click", async () => {
+    if (!state.supabase) return;
+    await state.supabase.auth.signOut();
+    state.accessToken = null;
+    updateAuthStatus();
+  });
+
+  state.authReady = true;
+  updateAuthStatus();
+}
+
 navButtons.myBags.addEventListener("click", async () => {
   await renderMyBags();
   setActiveView("myBags");
@@ -545,6 +671,7 @@ navButtons.analytics.addEventListener("click", async () => {
 });
 
 async function bootstrap() {
+  await initAuth();
   renderCreateForm();
   await renderMyBags();
   await renderArchived();
@@ -552,4 +679,7 @@ async function bootstrap() {
   setActiveView("myBags");
 }
 
-bootstrap();
+bootstrap().catch((error) => {
+  console.error(error);
+  alert("Failed to bootstrap app. Check console.");
+});
