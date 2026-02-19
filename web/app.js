@@ -76,6 +76,10 @@ function updateProfileStatus() {
   authElements.profileStatus.textContent = `Username: ${state.profileUsername || "-"}`;
 }
 
+function setProfileStatusMessage(message) {
+  authElements.profileStatus.textContent = message;
+}
+
 function ensureBagSelected() {
   const enabled = !!state.selectedBagId;
   navButtons.detail.disabled = !enabled;
@@ -802,7 +806,9 @@ async function loadProfile() {
       updateProfileStatus();
       return;
     }
-    throw error;
+    // Keep app usable even if profile endpoint is temporarily broken/migrating.
+    state.profileUsername = null;
+    setProfileStatusMessage("Username: unavailable (profile API error)");
   }
 }
 
