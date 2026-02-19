@@ -1,32 +1,26 @@
 # Coffee Tools API
 ## Motivation
-Backend-first coffee brewing tracker for home brewers.
+# ☕ Coffee Tools API
 
-It supports two modes:
+I built Coffee Tools as a backend-first brewing tracker designed for home coffee enthusiasts who dial in multiple brews from a single bag of beans. The goal was to explore how thoughtful data modelling and API design can support real-world workflows rather than just CRUD-style demos.
 
-- guest/dev mode via `DEV_USER_ID`
-- authenticated mode via Supabase token verification
+The system models the lifecycle of a coffee bag — from creation to experimentation to archival — allowing users to log brews, compare outcomes, mark a “best brew”, and review analytics over time. A lightweight browser UI at /app acts as an internal client for end-to-end testing and iteration.
 
-Core workflow:
+This project helped me deepen my understanding of backend architecture, request lifecycle design, and how UX decisions influence data structure.
 
-- create coffee bags
-- log brews against a bag
-- review brew history
-- mark a best brew recipe
-- view bag analytics
-- archive/unarchive bags
+Tech stack
 
-A lightweight browser UI is also included at `/app` for end-to-end manual testing.
+Node.js + TypeScript
 
-Tech stack:
+Express
 
-- Node.js + TypeScript
-- Express
-- Drizzle ORM
-- PostgreSQL (Docker)
-- Supabase Auth (email magic link + Google OAuth in `/app`)
-- Vitest (integration flow tests)
+Drizzle ORM
 
+PostgreSQL (Docker)
+
+Supabase Auth (magic link + Google OAuth)
+
+Vitest (integration flow testing)
 ## Quick Start
 ### Local Setup
 
