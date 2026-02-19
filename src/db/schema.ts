@@ -58,3 +58,17 @@ export const brews = pgTable(
     bagCreatedAtIdx: index("brews_bag_created_at_idx").on(table.bagId, table.createdAt),
   }),
 );
+
+// Public user profile used by social feed features.
+export const userProfiles = pgTable(
+  "user_profiles",
+  {
+    userId: uuid("user_id").primaryKey(),
+    username: text("username").notNull().unique(),
+    createdAt: timestamp("created_at", { withTimezone: false }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: false }).notNull().defaultNow(),
+  },
+  (table) => ({
+    usernameIdx: index("user_profiles_username_idx").on(table.username),
+  }),
+);

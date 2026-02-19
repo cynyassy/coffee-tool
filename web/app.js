@@ -8,6 +8,7 @@ const state = {
   supabase: null,
   authReady: false,
   feedPollingTimer: null,
+  profileUsername: null,
 };
 
 // Screen roots.
@@ -38,6 +39,10 @@ const authElements = {
   emailLogin: document.getElementById("auth-email-login"),
   googleLogin: document.getElementById("auth-google-login"),
   logout: document.getElementById("auth-logout"),
+  usernameInput: document.getElementById("profile-username"),
+  usernameSave: document.getElementById("profile-save"),
+  usernameRefresh: document.getElementById("profile-refresh"),
+  profileStatus: document.getElementById("profile-status"),
 };
 
 function setActiveView(key) {
@@ -65,6 +70,10 @@ function updateAuthStatus() {
   authElements.status.textContent = state.authRequired
     ? "Auth: signed out (login required for API calls)"
     : "Auth: guest mode (login optional)";
+}
+
+function updateProfileStatus() {
+  authElements.profileStatus.textContent = `Username: ${state.profileUsername || "-"}`;
 }
 
 function ensureBagSelected() {
@@ -104,6 +113,8 @@ async function request(path, init) {
 const api = {
   listBags: (status = "ACTIVE") => request(`/bags?status=${status}`),
   listFeed: (limit = 50) => request(`/feed/brews?limit=${limit}`),
+  getProfile: () => request("/me/profile"),
+  updateProfile: (payload) => request("/me/profile", { method: "PATCH", body: JSON.stringify(payload) }),
   createBag: (payload) => request("/bags", { method: "POST", body: JSON.stringify(payload) }),
   updateBag: (id, payload) => request(`/bags/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   getBag: (id) => request(`/bags/${id}`),
@@ -199,9 +210,10 @@ function brewTableHtml(brews, roastDate) {
   `;
 }
 
-function formatFeedUser(userId) {
-  if (!userId) return "unknown";
-  return `@${String(userId).slice(0, 8)}`;
+function formatFeedUser(item) {
+  if (item.username) return `@${item.username}`;
+  if (!item.userId) return "unknown";
+  return `@${String(item.userId).slice(0, 8)}`;
 }
 
 function feedItemHtml(item) {
@@ -217,7 +229,7 @@ function feedItemHtml(item) {
 
   return `
     <article class="card">
-      <p class="inline-meta">${formatFeedUser(item.userId)} brewed <strong>${item.coffeeName}</strong> (${item.roaster})</p>
+      <p class="inline-meta">${formatFeedUser(item)} brewed <strong>${item.coffeeName}</strong> (${item.roaster})</p>
       <p><strong>${item.method}</strong> ${item.brewer ? `- ${item.brewer}` : ""} ${item.isBest ? "- ★ best brew" : ""}</p>
       <p class="inline-meta">${recipe || "No recipe details"} ${item.grinder ? `- grinder ${item.grinder}` : ""}</p>
       <p class="inline-meta">Rating: ${rating}</p>
@@ -697,6 +709,7 @@ async function initAuth() {
     state.supabase.auth.onAuthStateChange((_event, session) => {
       state.accessToken = session?.access_token ?? null;
       updateAuthStatus();
+      loadProfile().catch(() => {});
       renderMyBags().catch(() => {});
       renderFeed().catch(() => {});
       renderArchived().catch(() => {});
@@ -745,11 +758,52 @@ async function initAuth() {
     if (!state.supabase) return;
     await state.supabase.auth.signOut();
     state.accessToken = null;
+    state.profileUsername = null;
     updateAuthStatus();
+    updateProfileStatus();
+  });
+
+  authElements.usernameRefresh.addEventListener("click", async () => {
+    await loadProfile();
+  });
+
+  authElements.usernameSave.addEventListener("click", async () => {
+    const username = authElements.usernameInput.value.trim().toLowerCase();
+    if (!username) {
+      alert("Enter a username first");
+      return;
+    }
+    try {
+      const profile = await api.updateProfile({ username });
+      state.profileUsername = profile.username;
+      authElements.usernameInput.value = profile.username;
+      updateProfileStatus();
+      await renderFeed();
+    } catch (error) {
+      alert(error.payload?.errors?.[0]?.message || error.payload?.error || "Failed to save username");
+    }
   });
 
   state.authReady = true;
   updateAuthStatus();
+  await loadProfile();
+  updateProfileStatus();
+}
+
+async function loadProfile() {
+  try {
+    const profile = await api.getProfile();
+    state.profileUsername = profile.username || null;
+    authElements.usernameInput.value = state.profileUsername || "";
+    updateProfileStatus();
+  } catch (error) {
+    if (error.status === 401) {
+      state.profileUsername = null;
+      updateProfileStatus();
+      return;
+    }
+    throw error;
+  }
 }
 
 navButtons.myBags.addEventListener("click", async () => {
