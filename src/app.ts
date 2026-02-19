@@ -35,6 +35,7 @@ app.get("/health", (_req, res) => {
 // Temporary single-user model until auth is added.
 const DEV_USER_ID = process.env.DEV_USER_ID ?? "00000000-0000-0000-0000-000000000001";
 const AUTH_REQUIRED = process.env.AUTH_REQUIRED === "true";
+const ALLOW_DEV_USER_HEADER = process.env.ALLOW_DEV_USER_HEADER === "true" || process.env.NODE_ENV === "test";
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
@@ -52,6 +53,10 @@ type SupabaseUser = {
 
 function isPublicPath(pathname: string) {
   return pathname === "/health" || pathname.startsWith("/app");
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 async function fetchSupabaseUser(accessToken: string): Promise<SupabaseUser | null> {
@@ -95,8 +100,15 @@ app.use(async (req, res, next) => {
 
   if (!token) {
     if (!AUTH_REQUIRED) {
-      res.locals.userId = DEV_USER_ID;
-      await ensureUserProfile(DEV_USER_ID, null, null);
+      // Test/dev override to simulate multiple users without external auth providers.
+      const overrideUserId = req.header("x-dev-user-id");
+      const overrideEmail = req.header("x-dev-user-email");
+      const userId = ALLOW_DEV_USER_HEADER && overrideUserId && isUuid(overrideUserId)
+        ? overrideUserId
+        : DEV_USER_ID;
+
+      res.locals.userId = userId;
+      await ensureUserProfile(userId, overrideEmail ?? null, null);
       return next();
     }
     return res.status(401).json({ error: "Authentication required" });
