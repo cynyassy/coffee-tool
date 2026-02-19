@@ -444,15 +444,31 @@ function brewFormHtml() {
     <h3>Make a Cup</h3>
     <label>Method *
       <select name="method" required>
-        <option>V60</option>
-        <option>Chemex</option>
+        <option>Pourover</option>
         <option>Aeropress</option>
         <option>French Press</option>
         <option>Espresso</option>
         <option>Moka Pot</option>
+        <option value="__custom__">Custom</option>
       </select>
     </label>
-    <label>Brewer<input name="brewer" /></label>
+    <label id="custom-method-label" class="hidden">Custom Method *
+      <input name="customMethod" placeholder="e.g. Origami Air S" />
+    </label>
+    <label>Brewer
+      <input name="brewer" list="brewer-options" placeholder="e.g. V60, Kalita, Cafec Deep 27, Gaggia Classic" />
+      <datalist id="brewer-options">
+        <option value="V60"></option>
+        <option value="Kalita"></option>
+        <option value="Cafec Deep 27"></option>
+        <option value="Chemex"></option>
+        <option value="Origami"></option>
+        <option value="Gaggia Classic"></option>
+        <option value="AeroPress"></option>
+        <option value="French Press"></option>
+        <option value="Moka Pot"></option>
+      </datalist>
+    </label>
     <label>Grinder<input name="grinder" /></label>
     <label>Dose (gms)<input type="number" name="dose" /></label>
     <label>Grind Setting<input type="number" name="grindSetting" /></label>
@@ -533,13 +549,30 @@ async function renderDetail() {
   });
 
   const form = document.getElementById("create-brew-form");
+  const methodSelect = form.querySelector("select[name='method']");
+  const customMethodLabel = form.querySelector("#custom-method-label");
+  const customMethodInput = form.querySelector("input[name='customMethod']");
+
+  const syncCustomMethodVisibility = () => {
+    const isCustom = methodSelect.value === "__custom__";
+    customMethodLabel.classList.toggle("hidden", !isCustom);
+    customMethodInput.required = isCustom;
+    if (!isCustom) customMethodInput.value = "";
+  };
+  methodSelect.addEventListener("change", syncCustomMethodVisibility);
+  syncCustomMethodVisibility();
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const fd = new FormData(form);
     const raw = Object.fromEntries(fd.entries());
+    const resolvedMethod =
+      raw.method === "__custom__"
+        ? String(raw.customMethod || "").trim()
+        : raw.method;
 
     const payload = {
-      method: raw.method,
+      method: resolvedMethod,
       brewer: raw.brewer || null,
       grinder: raw.grinder || null,
       dose: raw.dose || null,
@@ -556,6 +589,11 @@ async function renderDetail() {
     };
 
     try {
+      if (!payload.method) {
+        document.getElementById("brew-errors").innerHTML =
+          renderValidationErrors({ errors: [{ field: "customMethod", message: "is required when method is Custom" }] });
+        return;
+      }
       await api.createBrew(state.selectedBagId, payload);
       document.getElementById("brew-errors").innerHTML = "";
       await renderMyBags();
