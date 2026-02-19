@@ -4,7 +4,7 @@ import "dotenv/config";
 import path from "path";
 
 import { db } from "./db/client";
-import { bags, brews } from "./db/schema";
+import { bags, brews, userProfiles } from "./db/schema";
 import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import type {
@@ -15,6 +15,7 @@ import type {
   BrewResponse,
   GlobalFeedItemResponse,
   RestingStatus,
+  UserProfileResponse,
   ValidationErrorResponse,
   ValidationIssue,
 } from "./types/api";
@@ -37,7 +38,17 @@ const AUTH_REQUIRED = process.env.AUTH_REQUIRED === "true";
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
-type SupabaseUser = { id: string };
+type SupabaseUser = {
+  id: string;
+  email?: string | null;
+  user_metadata?: {
+    preferred_username?: string;
+    username?: string;
+    user_name?: string;
+    name?: string;
+    full_name?: string;
+  } | null;
+};
 
 function isPublicPath(pathname: string) {
   return pathname === "/health" || pathname.startsWith("/app");
@@ -85,6 +96,7 @@ app.use(async (req, res, next) => {
   if (!token) {
     if (!AUTH_REQUIRED) {
       res.locals.userId = DEV_USER_ID;
+      await ensureUserProfile(DEV_USER_ID, null, null);
       return next();
     }
     return res.status(401).json({ error: "Authentication required" });
@@ -94,17 +106,104 @@ app.use(async (req, res, next) => {
   if (!user) {
     if (!AUTH_REQUIRED) {
       res.locals.userId = DEV_USER_ID;
+      await ensureUserProfile(DEV_USER_ID, null, null);
       return next();
     }
     return res.status(401).json({ error: "Invalid or expired token" });
   }
 
   res.locals.userId = user.id;
+  await ensureUserProfile(user.id, user.email ?? null, pickMetadataUsername(user));
   return next();
 });
 
 function getRequestUserId(req: Request): string {
   return (req.res?.locals.userId as string | undefined) ?? DEV_USER_ID;
+}
+
+function normalizeUsername(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function sanitizeUsernameSeed(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function isValidUsername(value: string): boolean {
+  return /^[a-z0-9_]{3,24}$/.test(value);
+}
+
+function pickMetadataUsername(user: SupabaseUser | null | undefined): string | null {
+  const metadata = user?.user_metadata;
+  if (!metadata) return null;
+  const candidates = [
+    metadata.preferred_username,
+    metadata.username,
+    metadata.user_name,
+    metadata.name,
+    metadata.full_name,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const normalized = sanitizeUsernameSeed(candidate);
+    if (normalized.length >= 3) return normalized;
+  }
+  return null;
+}
+
+function buildDefaultUsername(
+  userId: string,
+  preferredEmail?: string | null,
+  preferredMetadataName?: string | null,
+): string {
+  const metadataSeed = sanitizeUsernameSeed(preferredMetadataName ?? "").slice(0, 16);
+  if (metadataSeed.length >= 3) return metadataSeed;
+
+  const emailPrefix = preferredEmail?.split("@")[0]?.toLowerCase() ?? "";
+  const sanitizedEmailPrefix = sanitizeUsernameSeed(emailPrefix).slice(0, 16);
+  const suffix = userId.replace(/-/g, "").slice(0, 8);
+  if (sanitizedEmailPrefix.length >= 3) return `${sanitizedEmailPrefix}_${suffix}`;
+  return `brewer_${suffix}`;
+}
+
+async function ensureUserProfile(
+  userId: string,
+  preferredEmail?: string | null,
+  preferredMetadataName?: string | null,
+) {
+  const existing = await db.select().from(userProfiles).where(eq(userProfiles.userId, userId));
+  if (existing[0]) return existing[0];
+
+  // Try a few deterministic username variations to avoid rare unique collisions.
+  const baseUsername = buildDefaultUsername(userId, preferredEmail, preferredMetadataName);
+  const candidates = [
+    baseUsername,
+    `${baseUsername.slice(0, 20)}_${Math.floor(Math.random() * 1000)}`,
+    `brewer_${userId.replace(/-/g, "").slice(0, 8)}_${Math.floor(Math.random() * 10)}`,
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const inserted = await db
+        .insert(userProfiles)
+        .values({
+          userId,
+          username: normalizeUsername(candidate),
+        })
+        .returning();
+      if (inserted[0]) return inserted[0];
+    } catch {
+      // Keep trying candidates on unique conflicts.
+    }
+  }
+
+  return null;
 }
 
 // Ensures a bag exists and belongs to the current dev user.
@@ -220,6 +319,49 @@ function toBagListItemResponse(
   };
 }
 
+// GET /me/profile
+// Reads the caller's profile for username editing and display.
+app.get("/me/profile", async (req, res) => {
+  const userId = getRequestUserId(req);
+  const profile = await ensureUserProfile(userId, null, null);
+  if (!profile) return res.status(500).json({ error: "Failed to read profile" });
+  const payload: UserProfileResponse = profile;
+  res.json(payload);
+});
+
+// PATCH /me/profile
+// Updates username with lightweight validation and uniqueness guarantees.
+app.patch("/me/profile", async (req, res) => {
+  const userId = getRequestUserId(req);
+  const rawUsername = String(req.body?.username ?? "");
+  const username = normalizeUsername(rawUsername);
+
+  if (!isValidUsername(username)) {
+    return sendValidationError(res, [
+      { field: "username", message: "must be 3-24 chars and contain only lowercase letters, numbers, or _" },
+    ]);
+  }
+
+  await ensureUserProfile(userId, null, null);
+
+  try {
+    const updated = await db
+      .update(userProfiles)
+      .set({
+        username,
+        updatedAt: new Date(),
+      })
+      .where(eq(userProfiles.userId, userId))
+      .returning();
+
+    if (!updated[0]) return res.status(404).json({ error: "Profile not found" });
+    const payload: UserProfileResponse = updated[0];
+    return res.json(payload);
+  } catch {
+    return sendValidationError(res, [{ field: "username", message: "is already taken" }], 409);
+  }
+});
+
 // POST /bags
 // Creates a new active bag for DEV_USER_ID.
 app.post("/bags", async (req, res) => {
@@ -321,6 +463,7 @@ app.get("/feed/brews", async (req, res) => {
       brewId: brews.id,
       bagId: brews.bagId,
       userId: bags.userId,
+      username: userProfiles.username,
       coffeeName: bags.coffeeName,
       roaster: bags.roaster,
       method: brews.method,
@@ -336,10 +479,14 @@ app.get("/feed/brews", async (req, res) => {
     })
     .from(brews)
     .innerJoin(bags, eq(brews.bagId, bags.id))
+    .leftJoin(userProfiles, eq(bags.userId, userProfiles.userId))
     .orderBy(desc(brews.createdAt))
     .limit(parsedLimit);
 
-  const payload: GlobalFeedItemResponse[] = rows;
+  const payload: GlobalFeedItemResponse[] = rows.map((row) => ({
+    ...row,
+    username: row.username ?? buildDefaultUsername(row.userId, null),
+  }));
   res.json(payload);
 });
 

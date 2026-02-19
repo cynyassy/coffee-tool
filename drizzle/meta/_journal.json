@@ -29,6 +29,13 @@
       "when": 1771238835844,
       "tag": "0003_aromatic_scorpion",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1771491000000,
+      "tag": "0004_social_user_profiles",
+      "breakpoints": true
     }
   ]
 }

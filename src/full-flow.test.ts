@@ -35,6 +35,13 @@ describe("coffee tools full flow", () => {
   });
 
   it("creates bag, logs brews, reads analytics, archives bag", async () => {
+    const updateProfile = await api("/me/profile", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: `tester_${Date.now().toString().slice(-6)}` }),
+    });
+    expect(updateProfile.status).toBe(200);
+
     const suffix = Date.now();
     const createBag = await api("/bags", {
       method: "POST",
@@ -125,7 +132,9 @@ describe("coffee tools full flow", () => {
     expect(feed.status).toBe(200);
     const feedRows = feed.data as JsonRecord[];
     expect(feedRows.length).toBeGreaterThanOrEqual(2);
-    expect(feedRows.some((row) => row.bagId === bagId)).toBe(true);
+    const flowFeedRow = feedRows.find((row) => row.bagId === bagId);
+    expect(flowFeedRow).toBeDefined();
+    expect(flowFeedRow?.username).toBeTypeOf("string");
 
     const analytics = await api(`/bags/${bagId}/analytics`);
     expect(analytics.status).toBe(200);
