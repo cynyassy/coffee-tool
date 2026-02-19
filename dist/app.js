@@ -250,6 +250,40 @@ app.get("/bags", async (req, res) => {
     const payload = rows.map((row) => toBagListItemResponse(row, bagStatsByBagId.get(row.id)?.brewCount ?? 0, bagStatsByBagId.get(row.id)?.averageRating ?? null));
     res.json(payload);
 });
+// GET /feed/brews?limit=50
+// Global activity feed across all users, newest brew first.
+app.get("/feed/brews", async (req, res) => {
+    const limitRaw = req.query.limit;
+    const parsedLimit = limitRaw ? Number(limitRaw) : 50;
+    if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 200) {
+        return sendValidationError(res, [{ field: "limit", message: "must be an integer between 1 and 200" }]);
+    }
+    // Single query join gives enough context to render a social timeline item.
+    const rows = await client_1.db
+        .select({
+        brewId: schema_1.brews.id,
+        bagId: schema_1.brews.bagId,
+        userId: schema_1.bags.userId,
+        coffeeName: schema_1.bags.coffeeName,
+        roaster: schema_1.bags.roaster,
+        method: schema_1.brews.method,
+        brewer: schema_1.brews.brewer,
+        grinder: schema_1.brews.grinder,
+        dose: schema_1.brews.dose,
+        grindSetting: schema_1.brews.grindSetting,
+        waterAmount: schema_1.brews.waterAmount,
+        rating: schema_1.brews.rating,
+        flavourNotes: schema_1.brews.flavourNotes,
+        isBest: schema_1.brews.isBest,
+        createdAt: schema_1.brews.createdAt,
+    })
+        .from(schema_1.brews)
+        .innerJoin(schema_1.bags, (0, drizzle_orm_1.eq)(schema_1.brews.bagId, schema_1.bags.id))
+        .orderBy((0, drizzle_orm_1.desc)(schema_1.brews.createdAt))
+        .limit(parsedLimit);
+    const payload = rows;
+    res.json(payload);
+});
 // POST /bags/:id/brews
 // Adds a brew entry linked to an owned bag.
 app.post("/bags/:id/brews", async (req, res) => {

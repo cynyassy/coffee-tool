@@ -7,11 +7,13 @@ const state = {
   accessToken: null,
   supabase: null,
   authReady: false,
+  feedPollingTimer: null,
 };
 
 // Screen roots.
 const views = {
   myBags: document.getElementById("view-my-bags"),
+  feed: document.getElementById("view-feed"),
   create: document.getElementById("view-create"),
   archived: document.getElementById("view-archived"),
   detail: document.getElementById("view-detail"),
@@ -21,6 +23,7 @@ const views = {
 // Navigation buttons.
 const navButtons = {
   myBags: document.getElementById("nav-my-bags"),
+  feed: document.getElementById("nav-feed"),
   create: document.getElementById("nav-create"),
   archived: document.getElementById("nav-archived"),
   detail: document.getElementById("nav-detail"),
@@ -100,6 +103,7 @@ async function request(path, init) {
 
 const api = {
   listBags: (status = "ACTIVE") => request(`/bags?status=${status}`),
+  listFeed: (limit = 50) => request(`/feed/brews?limit=${limit}`),
   createBag: (payload) => request("/bags", { method: "POST", body: JSON.stringify(payload) }),
   updateBag: (id, payload) => request(`/bags/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   getBag: (id) => request(`/bags/${id}`),
@@ -195,10 +199,39 @@ function brewTableHtml(brews, roastDate) {
   `;
 }
 
+function formatFeedUser(userId) {
+  if (!userId) return "unknown";
+  return `@${String(userId).slice(0, 8)}`;
+}
+
+function feedItemHtml(item) {
+  const createdAt = new Date(item.createdAt).toLocaleString();
+  const rating = item.rating ?? "-";
+  const recipe = [
+    item.dose != null ? `${item.dose}g` : null,
+    item.grindSetting != null ? `grind ${item.grindSetting}` : null,
+    item.waterAmount != null ? `${item.waterAmount}ml` : null,
+  ]
+    .filter(Boolean)
+    .join(" - ");
+
+  return `
+    <article class="card">
+      <p class="inline-meta">${formatFeedUser(item.userId)} brewed <strong>${item.coffeeName}</strong> (${item.roaster})</p>
+      <p><strong>${item.method}</strong> ${item.brewer ? `- ${item.brewer}` : ""} ${item.isBest ? "- ★ best brew" : ""}</p>
+      <p class="inline-meta">${recipe || "No recipe details"} ${item.grinder ? `- grinder ${item.grinder}` : ""}</p>
+      <p class="inline-meta">Rating: ${rating}</p>
+      <p class="inline-meta">${item.flavourNotes || "No flavour notes"}</p>
+      <p class="inline-meta">${createdAt}</p>
+    </article>
+  `;
+}
+
 function showAuthRequiredError() {
   if (!state.authRequired) return;
   const html = "<ul class='error-list'><li>Please sign in to use the app.</li></ul>";
   views.myBags.innerHTML = `<h2>My Bags</h2>${html}`;
+  views.feed.innerHTML = `<h2>Global Brew Feed</h2>${html}`;
   views.archived.innerHTML = `<h2>Archived Bags</h2>${html}`;
   views.detail.innerHTML = html;
   views.analytics.innerHTML = html;
@@ -234,6 +267,41 @@ async function renderMyBags() {
     if (error.status === 401) return showAuthRequiredError();
     throw error;
   }
+}
+
+async function renderFeed() {
+  try {
+    const feed = await api.listFeed(75);
+    views.feed.innerHTML = `
+      <h2>Global Brew Feed</h2>
+      <div class="actions">
+        <button id="refresh-feed" class="ghost">Refresh Feed</button>
+      </div>
+      <div id="feed-list"></div>
+    `;
+
+    const list = document.getElementById("feed-list");
+    if (!feed.length) {
+      list.innerHTML = `<p class="inline-meta">No brews in feed yet.</p>`;
+    } else {
+      list.innerHTML = feed.map(feedItemHtml).join("");
+    }
+
+    document.getElementById("refresh-feed").addEventListener("click", renderFeed);
+  } catch (error) {
+    if (error.status === 401) return showAuthRequiredError();
+    throw error;
+  }
+}
+
+function startFeedPolling() {
+  if (state.feedPollingTimer) return;
+  // Poll every 5 seconds so newly logged brews appear quickly in the global feed.
+  state.feedPollingTimer = window.setInterval(() => {
+    if (!views.feed.classList.contains("hidden")) {
+      renderFeed().catch((error) => console.error("feed refresh failed", error));
+    }
+  }, 5000);
 }
 
 function renderCreateForm() {
@@ -592,6 +660,7 @@ async function initAuth() {
       state.accessToken = session?.access_token ?? null;
       updateAuthStatus();
       renderMyBags().catch(() => {});
+      renderFeed().catch(() => {});
       renderArchived().catch(() => {});
       if (state.selectedBagId) {
         renderDetail().catch(() => {});
@@ -650,6 +719,11 @@ navButtons.myBags.addEventListener("click", async () => {
   setActiveView("myBags");
 });
 
+navButtons.feed.addEventListener("click", async () => {
+  await renderFeed();
+  setActiveView("feed");
+});
+
 navButtons.create.addEventListener("click", () => {
   renderCreateForm();
   setActiveView("create");
@@ -674,7 +748,9 @@ async function bootstrap() {
   await initAuth();
   renderCreateForm();
   await renderMyBags();
+  await renderFeed();
   await renderArchived();
+  startFeedPolling();
   ensureBagSelected();
   setActiveView("myBags");
 }

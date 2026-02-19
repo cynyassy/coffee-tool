@@ -13,6 +13,7 @@ import type {
   BagDetailResponse,
   BagListItemResponse,
   BrewResponse,
+  GlobalFeedItemResponse,
   RestingStatus,
   ValidationErrorResponse,
   ValidationIssue,
@@ -302,6 +303,43 @@ app.get("/bags", async (req, res) => {
       bagStatsByBagId.get(row.id)?.averageRating ?? null,
     ),
   );
+  res.json(payload);
+});
+
+// GET /feed/brews?limit=50
+// Global activity feed across all users, newest brew first.
+app.get("/feed/brews", async (req, res) => {
+  const limitRaw = req.query.limit as string | undefined;
+  const parsedLimit = limitRaw ? Number(limitRaw) : 50;
+  if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 200) {
+    return sendValidationError(res, [{ field: "limit", message: "must be an integer between 1 and 200" }]);
+  }
+
+  // Single query join gives enough context to render a social timeline item.
+  const rows = await db
+    .select({
+      brewId: brews.id,
+      bagId: brews.bagId,
+      userId: bags.userId,
+      coffeeName: bags.coffeeName,
+      roaster: bags.roaster,
+      method: brews.method,
+      brewer: brews.brewer,
+      grinder: brews.grinder,
+      dose: brews.dose,
+      grindSetting: brews.grindSetting,
+      waterAmount: brews.waterAmount,
+      rating: brews.rating,
+      flavourNotes: brews.flavourNotes,
+      isBest: brews.isBest,
+      createdAt: brews.createdAt,
+    })
+    .from(brews)
+    .innerJoin(bags, eq(brews.bagId, bags.id))
+    .orderBy(desc(brews.createdAt))
+    .limit(parsedLimit);
+
+  const payload: GlobalFeedItemResponse[] = rows;
   res.json(payload);
 });
 

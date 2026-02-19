@@ -90,3 +90,22 @@ export type AnalyticsResponse = {
   }>;
   bestBrew: BrewResponse | null;
 };
+
+// Global social feed row shape with basic bag + brew context.
+export type GlobalFeedItemResponse = {
+  brewId: string;
+  bagId: string;
+  userId: string;
+  coffeeName: string;
+  roaster: string;
+  method: string;
+  brewer: string | null;
+  grinder: string | null;
+  dose: number | null;
+  grindSetting: number | null;
+  waterAmount: number | null;
+  rating: number | null;
+  flavourNotes: string | null;
+  isBest: boolean;
+  createdAt: Date;
+};

@@ -121,6 +121,12 @@ describe("coffee tools full flow", () => {
     expect(brewList.status).toBe(200);
     expect((brewList.data as JsonRecord[]).length).toBe(2);
 
+    const feed = await api("/feed/brews");
+    expect(feed.status).toBe(200);
+    const feedRows = feed.data as JsonRecord[];
+    expect(feedRows.length).toBeGreaterThanOrEqual(2);
+    expect(feedRows.some((row) => row.bagId === bagId)).toBe(true);
+
     const analytics = await api(`/bags/${bagId}/analytics`);
     expect(analytics.status).toBe(200);
     const analyticsData = analytics.data as JsonRecord;
