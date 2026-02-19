@@ -96,7 +96,6 @@ export type GlobalFeedItemResponse = {
   brewId: string;
   bagId: string;
   userId: string;
-  username: string;
   coffeeName: string;
   roaster: string;
   method: string;
@@ -109,12 +108,4 @@ export type GlobalFeedItemResponse = {
   flavourNotes: string | null;
   isBest: boolean;
   createdAt: Date;
-};
-
-// User profile payload for reading/updating display handle.
-export type UserProfileResponse = {
-  userId: string;
-  username: string;
-  createdAt: Date;
-  updatedAt: Date;
 };

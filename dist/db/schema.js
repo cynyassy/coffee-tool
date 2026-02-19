@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.userProfiles = exports.brews = exports.bags = exports.bagStatus = void 0;
+exports.brews = exports.bags = exports.bagStatus = void 0;
 const pg_core_1 = require("drizzle-orm/pg-core");
 // Bag lifecycle status used by UI filtering and archive flow.
 exports.bagStatus = (0, pg_core_1.pgEnum)("bag_status", ["ACTIVE", "ARCHIVED"]);
@@ -45,14 +45,5 @@ exports.brews = (0, pg_core_1.pgTable)("brews", {
     createdAt: (0, pg_core_1.timestamp)("created_at", { withTimezone: false }).notNull().defaultNow(),
 }, (table) => ({
     bagCreatedAtIdx: (0, pg_core_1.index)("brews_bag_created_at_idx").on(table.bagId, table.createdAt),
-}));
-// Public user profile used by social feed features.
-exports.userProfiles = (0, pg_core_1.pgTable)("user_profiles", {
-    userId: (0, pg_core_1.uuid)("user_id").primaryKey(),
-    username: (0, pg_core_1.text)("username").notNull().unique(),
-    createdAt: (0, pg_core_1.timestamp)("created_at", { withTimezone: false }).notNull().defaultNow(),
-    updatedAt: (0, pg_core_1.timestamp)("updated_at", { withTimezone: false }).notNull().defaultNow(),
-}, (table) => ({
-    usernameIdx: (0, pg_core_1.index)("user_profiles_username_idx").on(table.username),
 }));
 //# sourceMappingURL=schema.js.map

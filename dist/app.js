@@ -66,7 +66,6 @@ app.use(async (req, res, next) => {
     if (!token) {
         if (!AUTH_REQUIRED) {
             res.locals.userId = DEV_USER_ID;
-            await ensureUserProfile(DEV_USER_ID, null, null);
             return next();
         }
         return res.status(401).json({ error: "Authentication required" });
@@ -75,92 +74,15 @@ app.use(async (req, res, next) => {
     if (!user) {
         if (!AUTH_REQUIRED) {
             res.locals.userId = DEV_USER_ID;
-            await ensureUserProfile(DEV_USER_ID, null, null);
             return next();
         }
         return res.status(401).json({ error: "Invalid or expired token" });
     }
     res.locals.userId = user.id;
-    await ensureUserProfile(user.id, user.email ?? null, pickMetadataUsername(user));
     return next();
 });
 function getRequestUserId(req) {
     return req.res?.locals.userId ?? DEV_USER_ID;
-}
-function normalizeUsername(value) {
-    return value.trim().toLowerCase();
-}
-function sanitizeUsernameSeed(value) {
-    return value
-        .trim()
-        .toLowerCase()
-        .replace(/[\s-]+/g, "_")
-        .replace(/[^a-z0-9_]/g, "")
-        .replace(/_+/g, "_")
-        .replace(/^_+|_+$/g, "");
-}
-function isValidUsername(value) {
-    return /^[a-z0-9_]{3,24}$/.test(value);
-}
-function pickMetadataUsername(user) {
-    const metadata = user?.user_metadata;
-    if (!metadata)
-        return null;
-    const candidates = [
-        metadata.preferred_username,
-        metadata.username,
-        metadata.user_name,
-        metadata.name,
-        metadata.full_name,
-    ];
-    for (const candidate of candidates) {
-        if (!candidate)
-            continue;
-        const normalized = sanitizeUsernameSeed(candidate);
-        if (normalized.length >= 3)
-            return normalized;
-    }
-    return null;
-}
-function buildDefaultUsername(userId, preferredEmail, preferredMetadataName) {
-    const metadataSeed = sanitizeUsernameSeed(preferredMetadataName ?? "").slice(0, 16);
-    if (metadataSeed.length >= 3)
-        return metadataSeed;
-    const emailPrefix = preferredEmail?.split("@")[0]?.toLowerCase() ?? "";
-    const sanitizedEmailPrefix = sanitizeUsernameSeed(emailPrefix).slice(0, 16);
-    const suffix = userId.replace(/-/g, "").slice(0, 8);
-    if (sanitizedEmailPrefix.length >= 3)
-        return `${sanitizedEmailPrefix}_${suffix}`;
-    return `brewer_${suffix}`;
-}
-async function ensureUserProfile(userId, preferredEmail, preferredMetadataName) {
-    const existing = await client_1.db.select().from(schema_1.userProfiles).where((0, drizzle_orm_1.eq)(schema_1.userProfiles.userId, userId));
-    if (existing[0])
-        return existing[0];
-    // Try a few deterministic username variations to avoid rare unique collisions.
-    const baseUsername = buildDefaultUsername(userId, preferredEmail, preferredMetadataName);
-    const candidates = [
-        baseUsername,
-        `${baseUsername.slice(0, 20)}_${Math.floor(Math.random() * 1000)}`,
-        `brewer_${userId.replace(/-/g, "").slice(0, 8)}_${Math.floor(Math.random() * 10)}`,
-    ];
-    for (const candidate of candidates) {
-        try {
-            const inserted = await client_1.db
-                .insert(schema_1.userProfiles)
-                .values({
-                userId,
-                username: normalizeUsername(candidate),
-            })
-                .returning();
-            if (inserted[0])
-                return inserted[0];
-        }
-        catch {
-            // Keep trying candidates on unique conflicts.
-        }
-    }
-    return null;
 }
 // Ensures a bag exists and belongs to the current dev user.
 async function getOwnedBagById(bagId, userId) {
@@ -255,46 +177,6 @@ function toBagListItemResponse(row, brewCount, averageRating) {
         ...buildBagComputedFields(row.roastDate),
     };
 }
-// GET /me/profile
-// Reads the caller's profile for username editing and display.
-app.get("/me/profile", async (req, res) => {
-    const userId = getRequestUserId(req);
-    const profile = await ensureUserProfile(userId, null, null);
-    if (!profile)
-        return res.status(500).json({ error: "Failed to read profile" });
-    const payload = profile;
-    res.json(payload);
-});
-// PATCH /me/profile
-// Updates username with lightweight validation and uniqueness guarantees.
-app.patch("/me/profile", async (req, res) => {
-    const userId = getRequestUserId(req);
-    const rawUsername = String(req.body?.username ?? "");
-    const username = normalizeUsername(rawUsername);
-    if (!isValidUsername(username)) {
-        return sendValidationError(res, [
-            { field: "username", message: "must be 3-24 chars and contain only lowercase letters, numbers, or _" },
-        ]);
-    }
-    await ensureUserProfile(userId, null, null);
-    try {
-        const updated = await client_1.db
-            .update(schema_1.userProfiles)
-            .set({
-            username,
-            updatedAt: new Date(),
-        })
-            .where((0, drizzle_orm_1.eq)(schema_1.userProfiles.userId, userId))
-            .returning();
-        if (!updated[0])
-            return res.status(404).json({ error: "Profile not found" });
-        const payload = updated[0];
-        return res.json(payload);
-    }
-    catch {
-        return sendValidationError(res, [{ field: "username", message: "is already taken" }], 409);
-    }
-});
 // POST /bags
 // Creates a new active bag for DEV_USER_ID.
 app.post("/bags", async (req, res) => {
@@ -382,7 +264,6 @@ app.get("/feed/brews", async (req, res) => {
         brewId: schema_1.brews.id,
         bagId: schema_1.brews.bagId,
         userId: schema_1.bags.userId,
-        username: schema_1.userProfiles.username,
         coffeeName: schema_1.bags.coffeeName,
         roaster: schema_1.bags.roaster,
         method: schema_1.brews.method,
@@ -398,13 +279,9 @@ app.get("/feed/brews", async (req, res) => {
     })
         .from(schema_1.brews)
         .innerJoin(schema_1.bags, (0, drizzle_orm_1.eq)(schema_1.brews.bagId, schema_1.bags.id))
-        .leftJoin(schema_1.userProfiles, (0, drizzle_orm_1.eq)(schema_1.bags.userId, schema_1.userProfiles.userId))
         .orderBy((0, drizzle_orm_1.desc)(schema_1.brews.createdAt))
         .limit(parsedLimit);
-    const payload = rows.map((row) => ({
-        ...row,
-        username: row.username ?? buildDefaultUsername(row.userId, null),
-    }));
+    const payload = rows;
     res.json(payload);
 });
 // POST /bags/:id/brews
